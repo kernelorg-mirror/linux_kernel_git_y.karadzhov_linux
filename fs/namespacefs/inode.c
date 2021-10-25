@@ -11,7 +11,9 @@
 #include <linux/fsnotify.h>
 #include <linux/magic.h>
 #include <linux/idr.h>
+#include <linux/proc_ns.h>
 #include <linux/seq_file.h>
+#include <linux/pid_namespace.h>
 
 #define S_IRALL (S_IRUSR | S_IRGRP | S_IROTH)
 #define S_IXALL (S_IXUSR | S_IXGRP | S_IXOTH)
@@ -314,6 +316,18 @@ void namespacefs_remove_pid_ns_dir(struct pid_namespace *ns)
 	namespacefs_remove_dir(ns->ns.dentry);
 }
 
+static int _add_ns_dentry(struct ns_common *ns)
+{
+	struct dentry *dentry = namespacefs_create_dir(ns->ops->name, NULL);
+
+	if (IS_ERR(dentry))
+		return PTR_ERR(dentry);
+
+	ns->dentry = dentry;
+
+	return 0;
+}
+
 static int __init namespacefs_init(void)
 {
 	int err;
@@ -326,9 +340,15 @@ static int __init namespacefs_init(void)
 	if (err)
 		goto fail;
 
+	err = _add_ns_dentry(&(init_pid_ns.ns));
+	if (err)
+		goto unreg;
+
 	namespacefs_registered = true;
 	return 0;
 
+ unreg:
+	unregister_filesystem(&namespacefs_fs_type);
  fail:
 	return err;
 }
