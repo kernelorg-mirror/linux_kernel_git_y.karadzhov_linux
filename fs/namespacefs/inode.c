@@ -10,6 +10,8 @@
 #include <linux/namei.h>
 #include <linux/fsnotify.h>
 #include <linux/magic.h>
+#include <linux/idr.h>
+#include <linux/seq_file.h>
 
 #define S_IRALL (S_IRUSR | S_IRGRP | S_IROTH)
 #define S_IXALL (S_IXUSR | S_IXGRP | S_IXOTH)
@@ -177,6 +179,74 @@ void namespacefs_remove_dir(struct dentry *dentry)
 
 	simple_recursive_removal(dentry, _remove_one);
 	_release_namespacefs();
+}
+
+struct idr_seq_context {
+	struct idr	*idr;
+	int		index;
+};
+
+static struct idr_seq_context *_alloc_idr_seq_context(struct idr *idr)
+{
+	struct idr_seq_context *idr_ctx = kzalloc(sizeof(*idr_ctx), GFP_KERNEL);
+
+	if (idr_ctx)
+		idr_ctx->idr = idr;
+	return idr_ctx;
+}
+
+static void *_idr_seq_get_next(struct idr_seq_context *idr_ctx, loff_t *pos)
+{
+	void *next = idr_get_next(idr_ctx->idr, &idr_ctx->index);
+
+	*pos = ++idr_ctx->index;
+	return next;
+}
+static void *idr_seq_start(struct seq_file *m, loff_t *pos)
+{
+	struct idr_seq_context *idr_ctx = m->private;
+
+	idr_lock(idr_ctx->idr);
+	idr_ctx->index = *pos;
+	return _idr_seq_get_next(idr_ctx, pos);
+}
+
+static void *idr_seq_next(struct seq_file *m, void *v, loff_t *pos)
+{
+	return _idr_seq_get_next(m->private, pos);
+}
+
+static void idr_seq_stop(struct seq_file *m, void *p)
+{
+	struct idr_seq_context *idr_ctx = m->private;
+
+	idr_unlock(idr_ctx->idr);
+}
+
+static int idr_seq_release(struct inode *inode, struct file *file)
+{
+	struct seq_file *m = file->private_data;
+
+	kfree(m->private);
+	return seq_release(inode, file);
+}
+
+static int idr_seq_open(struct file *file, struct idr *idr,
+			const struct seq_operations *ops)
+{
+	struct seq_file *m;
+	int ret;
+
+	ret = seq_open(file, ops);
+	if (ret)
+		return ret;
+
+	m = file->private_data;
+	m->private = _alloc_idr_seq_context(idr);
+	if (!m->private)
+		return -ENOMEM;
+
+	return 0;
 }
 
 static int __init namespacefs_init(void)
