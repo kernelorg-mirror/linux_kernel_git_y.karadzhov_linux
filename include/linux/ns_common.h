@@ -3,10 +3,12 @@
 #define _LINUX_NS_COMMON_H
 
 #include <linux/refcount.h>
+#include <linux/idr.h>
 
 struct proc_ns_operations;
 
 struct ns_common {
+	struct idr idr;
 	atomic_long_t stashed;
 	const struct proc_ns_operations *ops;
 	unsigned int inum;

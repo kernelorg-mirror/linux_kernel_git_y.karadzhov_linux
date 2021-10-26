@@ -9,7 +9,6 @@
 #include <linux/threads.h>
 #include <linux/nsproxy.h>
 #include <linux/ns_common.h>
-#include <linux/idr.h>
 
 /* MAX_PID_NS_LEVEL is needed for limiting size of 'struct pid' */
 #define MAX_PID_NS_LEVEL 32
@@ -17,7 +16,6 @@
 struct fs_pin;
 
 struct pid_namespace {
-	struct idr idr;
 	struct rcu_head rcu;
 	unsigned int pid_allocated;
 	struct task_struct *child_reaper;

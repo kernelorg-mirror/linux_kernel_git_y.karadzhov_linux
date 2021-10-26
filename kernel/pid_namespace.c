@@ -93,7 +93,7 @@ static struct pid_namespace *create_pid_namespace(struct user_namespace *user_ns
 	if (ns == NULL)
 		goto out_dec;
 
-	idr_init(&ns->idr);
+	idr_init(&ns->ns.idr);
 
 	ns->pid_cachep = create_pid_cachep(level);
 	if (ns->pid_cachep == NULL)
@@ -118,7 +118,7 @@ static struct pid_namespace *create_pid_namespace(struct user_namespace *user_ns
 	return ns;
 
 out_free_idr:
-	idr_destroy(&ns->idr);
+	idr_destroy(&ns->ns.idr);
 	kmem_cache_free(pid_ns_cachep, ns);
 out_dec:
 	dec_pid_namespaces(ucounts);
@@ -141,7 +141,7 @@ static void destroy_pid_namespace(struct pid_namespace *ns)
 	namespacefs_remove_pid_ns_dir(ns);
 	ns_free_inum(&ns->ns);
 
-	idr_destroy(&ns->idr);
+	idr_destroy(&ns->ns.idr);
 	call_rcu(&ns->rcu, delayed_free_pidns);
 }
 
@@ -205,7 +205,7 @@ void zap_pid_ns_processes(struct pid_namespace *pid_ns)
 	rcu_read_lock();
 	read_lock(&tasklist_lock);
 	nr = 2;
-	idr_for_each_entry_continue(&pid_ns->idr, pid, nr) {
+	idr_for_each_entry_continue(&pid_ns->ns.idr, pid, nr) {
 		task = pid_task(pid, PIDTYPE_PID);
 		if (task && !__fatal_signal_pending(task))
 			group_send_sig_info(SIGKILL, SEND_SIG_PRIV, task, PIDTYPE_MAX);
@@ -278,12 +278,12 @@ static int pid_ns_ctl_handler(struct ctl_table *table, int write,
 	 * it should synchronize its usage with external means.
 	 */
 
-	next = idr_get_cursor(&pid_ns->idr) - 1;
+	next = idr_get_cursor(&pid_ns->ns.idr) - 1;
 
 	tmp.data = &next;
 	ret = proc_dointvec_minmax(&tmp, write, buffer, lenp, ppos);
 	if (!ret && write)
-		idr_set_cursor(&pid_ns->idr, next + 1);
+		idr_set_cursor(&pid_ns->ns.idr, next + 1);
 
 	return ret;
 }

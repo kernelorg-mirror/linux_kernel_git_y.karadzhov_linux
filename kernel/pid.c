@@ -74,7 +74,7 @@ int pid_max_max = PID_MAX_LIMIT;
  */
 struct pid_namespace init_pid_ns = {
 	.ns.count = REFCOUNT_INIT(2),
-	.idr = IDR_INIT(init_pid_ns.idr),
+	.ns.idr = IDR_INIT(init_pid_ns.idr),
 	.pid_allocated = PIDNS_ADDING,
 	.level = 0,
 	.child_reaper = &init_task,
@@ -149,7 +149,7 @@ void free_pid(struct pid *pid)
 			break;
 		}
 
-		idr_remove(&ns->idr, upid->nr);
+		idr_remove(&ns->ns.idr, upid->nr);
 	}
 	spin_unlock_irqrestore(&pidmap_lock, flags);
 
@@ -209,7 +209,7 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *set_tid,
 		spin_lock_irq(&pidmap_lock);
 
 		if (tid) {
-			nr = idr_alloc(&tmp->idr, NULL, tid,
+			nr = idr_alloc(&tmp->ns.idr, NULL, tid,
 				       tid + 1, GFP_ATOMIC);
 			/*
 			 * If ENOSPC is returned it means that the PID is
@@ -223,14 +223,14 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *set_tid,
 			 * init really needs pid 1, but after reaching the
 			 * maximum wrap back to RESERVED_PIDS
 			 */
-			if (idr_get_cursor(&tmp->idr) > RESERVED_PIDS)
+			if (idr_get_cursor(&tmp->ns.idr) > RESERVED_PIDS)
 				pid_min = RESERVED_PIDS;
 
 			/*
 			 * Store a null pointer so find_pid_ns does not find
 			 * a partially initialized PID (see below).
 			 */
-			nr = idr_alloc_cyclic(&tmp->idr, NULL, pid_min,
+			nr = idr_alloc_cyclic(&tmp->ns.idr, NULL, pid_min,
 					      pid_max, GFP_ATOMIC);
 		}
 		spin_unlock_irq(&pidmap_lock);
@@ -271,7 +271,7 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *set_tid,
 		goto out_unlock;
 	for ( ; upid >= pid->numbers; --upid) {
 		/* Make the PID visible to find_pid_ns. */
-		idr_replace(&upid->ns->idr, pid, upid->nr);
+		idr_replace(&upid->ns->ns.idr, pid, upid->nr);
 		upid->ns->pid_allocated++;
 	}
 	spin_unlock_irq(&pidmap_lock);
@@ -286,12 +286,12 @@ out_free:
 	spin_lock_irq(&pidmap_lock);
 	while (++i <= ns->level) {
 		upid = pid->numbers + i;
-		idr_remove(&upid->ns->idr, upid->nr);
+		idr_remove(&upid->ns->ns.idr, upid->nr);
 	}
 
 	/* On failure to allocate the first pid, reset the state */
 	if (ns->pid_allocated == PIDNS_ADDING)
-		idr_set_cursor(&ns->idr, 0);
+		idr_set_cursor(&ns->ns.idr, 0);
 
 	spin_unlock_irq(&pidmap_lock);
 
@@ -308,7 +308,7 @@ void disable_pid_allocation(struct pid_namespace *ns)
 
 struct pid *find_pid_ns(int nr, struct pid_namespace *ns)
 {
-	return idr_find(&ns->idr, nr);
+	return idr_find(&ns->ns.idr, nr);
 }
 EXPORT_SYMBOL_GPL(find_pid_ns);
 
@@ -517,7 +517,7 @@ EXPORT_SYMBOL_GPL(task_active_pid_ns);
  */
 struct pid *find_ge_pid(int nr, struct pid_namespace *ns)
 {
-	return idr_get_next(&ns->idr, &nr);
+	return idr_get_next(&ns->ns.idr, &nr);
 }
 
 struct pid *pidfd_get_pid(unsigned int fd, unsigned int *flags)
@@ -622,7 +622,7 @@ void __init pid_idr_init(void)
 				PIDS_PER_CPU_MIN * num_possible_cpus());
 	pr_info("pid_max: default: %u minimum: %u\n", pid_max, pid_max_min);
 
-	idr_init(&init_pid_ns.idr);
+	idr_init(&init_pid_ns.ns.idr);
 
 	init_pid_ns.pid_cachep = KMEM_CACHE(pid,
 			SLAB_HWCACHE_ALIGN | SLAB_PANIC | SLAB_ACCOUNT);

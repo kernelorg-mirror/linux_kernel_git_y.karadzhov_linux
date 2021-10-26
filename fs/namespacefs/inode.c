@@ -303,7 +303,7 @@ int namespacefs_create_pid_ns_dir(struct pid_namespace *ns)
 		return err;
 
 	dentry = namespacefs_create_file("tasks", ns->ns.dentry,
-					 &tasks_fops, &ns->idr);
+					 &tasks_fops, &ns->ns.idr);
 	if (IS_ERR(dentry)) {
 		dput(ns->ns.dentry);
 		return PTR_ERR(dentry);
