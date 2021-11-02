@@ -14,6 +14,7 @@
 #include <linux/proc_ns.h>
 #include <linux/seq_file.h>
 #include <linux/pid_namespace.h>
+#include <linux/utsname.h>
 
 #define S_IRALL (S_IRUSR | S_IRGRP | S_IROTH)
 #define S_IXALL (S_IXUSR | S_IXGRP | S_IXOTH)
@@ -316,6 +317,56 @@ void namespacefs_remove_pid_ns_dir(struct pid_namespace *ns)
 	namespacefs_remove_dir(ns->ns.dentry);
 }
 
+#define _UNAME_N_FIELDS		5
+#define _UNAME_MAX_LEN		((__NEW_UTS_LEN + 2) * _UNAME_MAX_LEN + 1)
+
+static ssize_t _uts_ns_read(struct file *file, char __user *ubuf,
+			    size_t count, loff_t *pos)
+{
+	struct new_utsname *name = file->private_data;
+	char buff[_UNAME_MAX_LEN];
+	int n;
+
+	n = snprintf(buff, _UNAME_MAX_LEN,
+		     "%s %s %s %s %s\n",
+		     name->sysname,
+		     name->nodename,
+		     name->release,
+		     name->version,
+		     name->machine);
+
+	return simple_read_from_buffer(ubuf, count, pos, buff, n);
+}
+
+static const struct file_operations uts_fops = {
+	.open = simple_open,
+	.read = _uts_ns_read,
+	.llseek = default_llseek,
+};
+
+int namespacefs_create_uts_ns_dir(struct uts_namespace *ns)
+{
+	int err = _create_inod_dir(&ns->ns, init_uts_ns.ns.dentry);
+	struct dentry *dentry;
+
+	if (err)
+		return err;
+
+	dentry = namespacefs_create_file("uname", ns->ns.dentry,
+					 &uts_fops, &ns->name);
+	if (IS_ERR(dentry)) {
+		dput(ns->ns.dentry);
+		return PTR_ERR(dentry);
+	}
+
+	return 0;
+}
+
+void namespacefs_remove_uts_ns_dir(struct uts_namespace *ns)
+{
+	namespacefs_remove_dir(ns->ns.dentry);
+}
+
 static int _add_ns_dentry(struct ns_common *ns)
 {
 	struct dentry *dentry = namespacefs_create_dir(ns->ops->name, NULL);
@@ -340,7 +391,11 @@ static int __init namespacefs_init(void)
 	if (err)
 		goto fail;
 
-	err = _add_ns_dentry(&(init_pid_ns.ns));
+	err = _add_ns_dentry(&init_pid_ns.ns);
+	if (err)
+		goto unreg;
+
+	err = _add_ns_dentry(&init_uts_ns.ns);
 	if (err)
 		goto unreg;
 
