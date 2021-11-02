@@ -93,7 +93,31 @@ static inline struct cred *nsset_cred(struct nsset *set)
 
 int copy_namespaces(unsigned long flags, struct task_struct *tsk);
 void exit_task_namespaces(struct task_struct *tsk);
-void switch_task_namespaces(struct task_struct *tsk, struct nsproxy *new);
+
+#ifdef CONFIG_NAMESPACE_FS
+
+int nsproxy_tasks_update(struct task_struct *p, struct pid *pid);
+
+// int nsproxy_change_pid(struct nsproxy *nsp, struct pid *old_pid,
+// 					    struct pid *new_pid);
+
+#else
+
+static inline int
+nsproxy_tasks_update(struct task_struct *p, struct pid *pid)
+{
+	return 0;
+}
+
+// static inline int
+// nsproxy_change_pid(struct task_struct *p, struct pid *new_pid)
+// {
+// 	return 0;
+// }
+
+#endif /* CONFIG_NAMESPACE_FS */
+
+int switch_task_namespaces(struct task_struct *tsk, struct nsproxy *new);
 void free_nsproxy(struct nsproxy *ns);
 int unshare_nsproxy_namespaces(unsigned long, struct nsproxy **,
 	struct cred *, struct fs_struct *);

@@ -2282,6 +2282,10 @@ static __latent_entropy struct task_struct *copy_process(
 	p->kretprobe_instances.first = NULL;
 #endif
 
+	retval = nsproxy_tasks_update(p, pid);
+	if (retval)
+		goto bad_fork_free_pid;
+
 	/*
 	 * Ensure that the cgroup subsystem policies allow the new process to be
 	 * forked. It should be noted that the new process's css_set can be changed
@@ -3095,8 +3099,11 @@ int ksys_unshare(unsigned long unshare_flags)
 			shm_init_task(current);
 		}
 
-		if (new_nsproxy)
-			switch_task_namespaces(current, new_nsproxy);
+		if (new_nsproxy) {
+			err = switch_task_namespaces(current, new_nsproxy);
+			if (err)
+				goto bad_nsproxy_switch;
+		}
 
 		task_lock(current);
 
@@ -3128,6 +3135,7 @@ int ksys_unshare(unsigned long unshare_flags)
 
 	perf_event_namespaces(current);
 
+bad_nsproxy_switch:
 bad_unshare_cleanup_cred:
 	if (new_cred)
 		put_cred(new_cred);

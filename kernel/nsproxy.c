@@ -59,6 +59,89 @@ static inline struct nsproxy *create_nsproxy(void)
 	return nsproxy;
 }
 
+#ifdef CONFIG_NAMESPACE_FS
+
+static int ns_add_pid(struct ns_common *ns, struct pid *pid)
+{
+	pid_t nr;
+	int i;
+
+	/*
+	 * No need to store the PID if this is the main instance of the
+	 * namespace.
+	 */
+	if (ns->inum == init_uts_ns.ns.inum)
+		return 0;
+
+	nr = pid_nr(pid);
+	idr_preload(GFP_KERNEL);
+	i = idr_alloc(&ns->idr, pid, nr, nr + 1, GFP_ATOMIC);
+	idr_preload_end();
+	trace_printk("adding %i (%i ptr: %p) to [%u]\n", nr, i, (void *) pid, ns->inum);
+	return 0;
+}
+
+static int ns_rmv_pid(struct ns_common *ns, struct pid *pid)
+{
+	/* Do nothing in the main instance of the namespace. */
+	if (ns->inum == init_uts_ns.ns.inum)
+		return 0;
+
+	idr_remove(&ns->idr, pid_nr(pid));
+	trace_printk("removing %i from [%u]\n", pid_nr(pid), ns->inum);
+	return 0;
+}
+
+int nsproxy_tasks_update(struct task_struct *p, struct pid *pid)
+{
+	struct nsproxy *nsp = p->nsproxy;
+	int err;
+
+	task_lock(p);
+	err = ns_add_pid(&nsp->uts_ns->ns, pid);
+	/* All other namespaces (except 'pid') to be added here/ */
+	task_unlock(p);
+
+	return err;
+}
+
+static int nsproxy_tasks_switch(struct pid *pid,
+				struct ns_common *old_ns,
+				struct ns_common *new_ns)
+{
+	int err = 0;
+
+	if (new_ns)
+		err = ns_add_pid(new_ns, pid);
+
+	return err ? err : ns_rmv_pid(old_ns, pid);
+}
+
+int nsproxy_change_pid(struct nsproxy *nsp, struct pid *old_pid,
+					    struct pid *new_pid)
+{
+	int err;
+
+	if (nsp->uts_ns->ns.inum != init_uts_ns.ns.inum) {
+		err = ns_rmv_pid(&nsp->uts_ns->ns, old_pid);
+		if (!err && new_pid)
+			err = ns_add_pid(&nsp->uts_ns->ns, new_pid);
+	}
+
+	return err;
+}
+
+#else
+
+static int nsproxy_tasks_switch(struct pid *pid,
+				struct ns_common *old_ns,
+				struct ns_common *new_ns)
+{
+	return 0;
+}
+
+#endif /* CONFIG_NAMESPACE_FS */
+
 /*
  * Create new nsproxy and all of its the associated namespaces.
  * Return the newly created nsproxy.  Do not attach this to the task,
@@ -86,6 +169,17 @@ static struct nsproxy *create_new_namespaces(unsigned long flags,
 		err = PTR_ERR(new_nsp->uts_ns);
 		goto out_uts;
 	}
+
+	if (flags & CLONE_NEWUTS) {
+		task_lock(tsk);
+		err = nsproxy_tasks_switch(task_pid(tsk),
+					   &tsk->nsproxy->uts_ns->ns,
+					   &new_nsp->uts_ns->ns);
+		task_unlock(tsk);
+		if (err)
+			goto out_ipc;
+
+	} /* Same must be done for all other namespaces (except 'pid'). */
 
 	new_nsp->ipc_ns = copy_ipcs(flags, user_ns, tsk->nsproxy->ipc_ns);
 	if (IS_ERR(new_nsp->ipc_ns)) {
@@ -182,6 +276,7 @@ int copy_namespaces(unsigned long flags, struct task_struct *tsk)
 	timens_on_fork(new_ns, tsk);
 
 	tsk->nsproxy = new_ns;
+
 	return 0;
 }
 
@@ -234,19 +329,35 @@ out:
 	return err;
 }
 
-void switch_task_namespaces(struct task_struct *p, struct nsproxy *new)
+int switch_task_namespaces(struct task_struct *p, struct nsproxy *new)
 {
 	struct nsproxy *ns;
+	int err;
 
 	might_sleep();
 
 	task_lock(p);
 	ns = p->nsproxy;
+
+	if (new) {
+		err = nsproxy_tasks_switch(task_pid(p), &ns->uts_ns->ns,
+							&new->uts_ns->ns);
+		if (err) {
+			task_unlock(p);
+			return err;
+		}
+		/*
+		 * The switching of all other namespaces (except 'pid') must
+		 * be added here.
+		 */
+	}
+
 	p->nsproxy = new;
 	task_unlock(p);
 
 	if (ns)
 		put_nsproxy(ns);
+	return 0;
 }
 
 void exit_task_namespaces(struct task_struct *p)
@@ -490,10 +601,11 @@ out:
  * exported anymore a simple commit handler for each namespace
  * should be added to ns_common.
  */
-static void commit_nsset(struct nsset *nsset)
+static int commit_nsset(struct nsset *nsset)
 {
 	unsigned flags = nsset->flags;
 	struct task_struct *me = current;
+	int ret;
 
 #ifdef CONFIG_USER_NS
 	if (flags & CLONE_NEWUSER) {
@@ -520,8 +632,9 @@ static void commit_nsset(struct nsset *nsset)
 #endif
 
 	/* transfer ownership */
-	switch_task_namespaces(me, nsset->nsproxy);
+	ret = switch_task_namespaces(me, nsset->nsproxy);
 	nsset->nsproxy = NULL;
+	return ret;
 }
 
 SYSCALL_DEFINE2(setns, int, fd, int, flags)
@@ -556,10 +669,16 @@ SYSCALL_DEFINE2(setns, int, fd, int, flags)
 		err = validate_ns(&nsset, ns);
 	else
 		err = validate_nsset(&nsset, file->private_data);
-	if (!err) {
-		commit_nsset(&nsset);
-		perf_event_namespaces(current);
-	}
+	if (err)
+		goto put_nss;
+
+	err = commit_nsset(&nsset);
+	if (err)
+		goto put_nss;
+
+	perf_event_namespaces(current);
+
+put_nss:
 	put_nsset(&nsset);
 out:
 	fput(file);
