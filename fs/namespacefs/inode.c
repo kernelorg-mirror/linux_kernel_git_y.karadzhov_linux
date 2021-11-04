@@ -354,12 +354,26 @@ int namespacefs_create_uts_ns_dir(struct uts_namespace *ns)
 
 	dentry = namespacefs_create_file("uname", ns->ns.dentry,
 					 &uts_fops, &ns->name);
-	if (IS_ERR(dentry)) {
-		dput(ns->ns.dentry);
-		return PTR_ERR(dentry);
-	}
+	if (IS_ERR(dentry))
+		goto error;
 
+	dentry = namespacefs_create_file("tasks", ns->ns.dentry,
+					 &tasks_fops, &ns->ns.idr);
+	if (IS_ERR(dentry))
+		goto error;
+
+	idr_init(&ns->ns.idr);
 	return 0;
+
+error:
+	namespacefs_remove_dir(ns->ns.dentry);
+	return PTR_ERR(dentry);
+}
+
+void namespacefs_remove_uts_dir(struct uts_namespace *ns)
+{
+	idr_destroy(&ns->ns.idr);
+	namespacefs_remove_dir(ns->ns.dentry);
 }
 
 void namespacefs_remove_uts_ns_dir(struct uts_namespace *ns)
